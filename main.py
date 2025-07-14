@@ -94,7 +94,7 @@ Consignes :
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=300
+            timeout=600
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
