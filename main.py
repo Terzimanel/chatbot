@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
@@ -25,9 +24,37 @@ class PromptRequest(BaseModel):
 class TextRequest(BaseModel):
     prompt: str
 
+def filter_schema(schema: str, question: str) -> str:
+    """
+    Filtre le schéma en ne gardant que les lignes pertinentes contenant des mots-clés de la question.
+    Si aucun match trouvé, retourne tout le schéma (fallback).
+    """
+    lines = schema.splitlines()
+    filtered = []
+    keywords = [w.strip(" ,.!?").lower() for w in question.split() if len(w) > 2]
+
+    for line in lines:
+        for kw in keywords:
+            if kw in line.lower():
+                filtered.append(line)
+                break
+
+    if filtered:
+        print(f"✅ Schema filtré : {len(filtered)} lignes sur {len(lines)}")
+        return "\n".join(filtered)
+    else:
+        print("⚠️ Aucun match trouvé dans le schema. Envoi du schéma complet.")
+        return schema
+
 @app.post("/generate-sql")
 async def generate_sql(request: PromptRequest):
-    schema_to_use = request.schema if request.schema else SCHEMA_CONTENT
+    # Choisir le schema fourni ou celui chargé au démarrage
+    raw_schema = request.schema if request.schema else SCHEMA_CONTENT
+
+    # Filtrage intelligent pour réduire la taille
+    schema_to_use = filter_schema(raw_schema, request.user_question)
+
+    # Construction du prompt
     prompt = f"""
 Vous êtes un assistant IA qui génère des requêtes SQL PostgreSQL.
 Voici le schéma de la base (avec noms exacts entre guillemets) :
@@ -44,6 +71,8 @@ Consignes strictes :
 - Si la requête est impossible, répondez avec : Erreur : impossible de générer.
 """
 
+    print(f"✅ Longueur du prompt final : {len(prompt)} caractères")
+
     try:
         response = requests.post(
             "http://127.0.0.1:11434/api/generate",
@@ -52,7 +81,7 @@ Consignes strictes :
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=300
+            timeout=120  # Réduit à 2 minutes au lieu de 5
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
@@ -74,6 +103,8 @@ Consignes strictes :
 @app.post("/generate-text")
 async def generate_text(request: TextRequest):
     try:
+        print(f"✅ Longueur du prompt texte : {len(request.prompt)} caractères")
+
         response = requests.post(
             "http://127.0.0.1:11434/api/generate",
             json={
@@ -81,7 +112,7 @@ async def generate_text(request: TextRequest):
                 "prompt": request.prompt,
                 "stream": False
             },
-            timeout=300
+            timeout=120
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
