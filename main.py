@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import requests
+import re
 
 app = FastAPI()
 
@@ -24,27 +25,40 @@ class PromptRequest(BaseModel):
 class TextRequest(BaseModel):
     prompt: str
 
-def filter_schema(schema: str, question: str) -> str:
+def smart_filter_schema(schema: str, question: str) -> str:
     """
-    Filtre le schéma en ne gardant que les lignes pertinentes contenant des mots-clés de la question.
-    Si aucun match trouvé, retourne tout le schéma (fallback).
+    Essaie d'extraire uniquement les tables pertinentes du schema
+    en fonction de la question.
     """
-    lines = schema.splitlines()
-    filtered = []
-    keywords = [w.strip(" ,.!?").lower() for w in question.split() if len(w) > 2]
+    table_blocks = re.split(r'(?m)^\d+\.\s+', schema)
+    table_names = []
+    blocks_by_name = {}
 
-    for line in lines:
-        for kw in keywords:
-            if kw in line.lower():
-                filtered.append(line)
-                break
+    for block in table_blocks[1:]:
+        lines = block.strip().splitlines()
+        if not lines:
+            continue
+        header = lines[0]
+        table_name = header.split()[0].replace('"','')
+        table_names.append(table_name.lower())
+        blocks_by_name[table_name.lower()] = f"{header}\n" + "\n".join(lines[1:])
 
-    if filtered:
-        print(f"✅ Schema filtré : {len(filtered)} lignes sur {len(lines)}")
-        return "\n".join(filtered)
-    else:
-        print("⚠️ Aucun match trouvé dans le schema. Envoi du schéma complet.")
-        return schema
+    print(f"✅ Tables détectées : {table_names}")
+
+    question_words = set(w.lower().strip(" ,.!?") for w in question.split() if len(w) > 2)
+    print(f"✅ Mots de la question : {question_words}")
+
+    matches = []
+    for table in table_names:
+        if any(word in table for word in question_words):
+            matches.append(table)
+
+    if matches:
+        print(f"✅ Tables retenues : {matches}")
+        return "\n\n".join(blocks_by_name[m] for m in matches)
+
+    print("⚠️ Aucun match trouvé, retour complet")
+    return schema
 
 @app.post("/generate-sql")
 async def generate_sql(request: PromptRequest):
@@ -52,23 +66,22 @@ async def generate_sql(request: PromptRequest):
     raw_schema = request.schema if request.schema else SCHEMA_CONTENT
 
     # Filtrage intelligent pour réduire la taille
-    schema_to_use = filter_schema(raw_schema, request.user_question)
+    schema_to_use = smart_filter_schema(raw_schema, request.user_question)
 
-    # Construction du prompt
+    # Construction du prompt allégé
     prompt = f"""
-Vous êtes un assistant IA qui génère des requêtes SQL PostgreSQL.
-Voici le schéma de la base (avec noms exacts entre guillemets) :
+Générez une requête SQL PostgreSQL répondant à cette question :
+
+"{request.user_question}"
+
+Utilisez uniquement les tables et colonnes suivantes :
 
 {schema_to_use}
 
-L'utilisateur demande : "{request.user_question}"
-
-Consignes strictes :
-- Générez uniquement la requête SQL exécutable, sans explication ni format Markdown.
-- Commencez par SELECT ou WITH uniquement.
-- Utilisez exactement les noms de colonnes et de tables du schéma fourni, en respectant les guillemets doubles s'ils sont présents.
-- ❌ N'inventez jamais de colonne. Si une colonne n'est pas dans le schéma, ne l'utilisez pas.
-- Si la requête est impossible, répondez avec : Erreur : impossible de générer.
+Consignes :
+- Répondez uniquement avec la requête SQL valide (commençant par SELECT ou WITH), sans explication ni format Markdown.
+- Ne pas inventer de colonnes ni de tables.
+- Si c'est impossible, répondez : Erreur : impossible de générer.
 """
 
     print(f"✅ Longueur du prompt final : {len(prompt)} caractères")
@@ -81,7 +94,7 @@ Consignes strictes :
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=120  # Réduit à 2 minutes au lieu de 5
+            timeout=60
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
@@ -112,7 +125,7 @@ async def generate_text(request: TextRequest):
                 "prompt": request.prompt,
                 "stream": False
             },
-            timeout=120
+            timeout=60
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
