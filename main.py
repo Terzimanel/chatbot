@@ -94,7 +94,7 @@ Consignes :
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=60
+            timeout=300
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
@@ -125,7 +125,7 @@ async def generate_text(request: TextRequest):
                 "prompt": request.prompt,
                 "stream": False
             },
-            timeout=60
+            timeout=300
         )
         response.raise_for_status()
         result = response.json().get("response", "").strip()
